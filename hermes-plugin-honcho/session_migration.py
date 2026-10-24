@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
+
+from utils import atomic_json_write, read_json_or_empty
 
 from .session_auth import HonchoAuthError
 
@@ -16,11 +19,18 @@ _MEMORY_FILES = (
     ("SOUL.md", "agent_soul.md", "Agent persona and identity configuration", "ai"),
 )
 
+# Lives beside the files it describes: {"<backend>/<workspace>/<owner peer>": ISO upload time}.
+# A gateway session key changes per Slack DM thread, so "the Honcho session is empty" is true on
+# every new top-level DM; without this record each one re-uploaded the files (and Honcho re-derived
+# their now-stale facts as fresh conclusions).
+_MIGRATED_MARKER = ".honcho_migrated.json"
+
 
 class SessionMigrationMixin:
-    def migrate_memory_files(self, session_key: str, memory_dir: str) -> bool:
+    def migrate_memory_files(self, session_key: str, memory_dir: str, *, force: bool = False) -> bool:
         """Upload MEMORY.md / USER.md / SOUL.md to Honcho when it activates on an instance with
-        locally consolidated memory; skips missing/empty files. True if at least one uploaded."""
+        locally consolidated memory; skips missing/empty files. True if at least one uploaded.
+        Runs once per backend+workspace+owner unless ``force`` (the explicit ``hermes honcho migrate``)."""
         memory_path = Path(memory_dir)
         if not memory_path.exists():
             return False
@@ -41,6 +51,14 @@ class SessionMigrationMixin:
         if owner_peer_id is None or session.user_peer_id != owner_peer_id:
             logger.info("Skipping memory-file migration: session user peer '%s' is not the declared owner (peerName=%s)",
                         session.user_peer_id, owner_peer_id or "unset")
+            return False
+
+        marker_path = memory_path / _MIGRATED_MARKER
+        marker_key = "/".join((self._cfg("base_url") or self._cfg("environment") or "production",
+                               self._cfg("workspace_id") or "hermes", owner_peer_id))
+        migrated = read_json_or_empty(marker_path)
+        if marker_key in migrated and not force:
+            logger.debug("Skipping memory-file migration: already uploaded to %s at %s", marker_key, migrated[marker_key])
             return False
 
         uploaded = False
@@ -72,4 +90,6 @@ class SessionMigrationMixin:
             except Exception as e:
                 logger.error("Failed to upload %s to Honcho: %s", filename, e)
 
+        if uploaded:
+            atomic_json_write(marker_path, {**migrated, marker_key: datetime.now(timezone.utc).isoformat()})
         return uploaded

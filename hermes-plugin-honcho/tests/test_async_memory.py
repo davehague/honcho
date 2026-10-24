@@ -725,6 +725,37 @@ class TestNewConfigFieldDefaults:
         assert cfg.write_frequency == "async"
 
 
+class TestMemoryFileMigrationRunsOnce:
+    """A gateway session key changes per Slack DM thread, so every new top-level DM is a fresh,
+    empty Honcho session; the automatic migration must upload the files once per workspace+owner,
+    not once per session."""
+
+    def test_new_session_after_migration_uploads_nothing_unless_forced(self, tmp_path, make_manager):
+        mgr = make_manager(write_frequency="turn", peer_name="owner-user")
+        (tmp_path / "MEMORY.md").write_text("memory facts", encoding="utf-8")
+        (tmp_path / "USER.md").write_text("user profile", encoding="utf-8")
+
+        first, first_hs = _prime_migration_session(mgr, "slack:dm:thread-1", "slack-dm-thread-1")
+        assert mgr.migrate_memory_files(first.key, str(tmp_path)) is True
+        assert first_hs.upload_file.call_count == 2
+
+        second, second_hs = _prime_migration_session(mgr, "slack:dm:thread-2", "slack-dm-thread-2")
+        assert mgr.migrate_memory_files(second.key, str(tmp_path)) is False
+        assert second_hs.upload_file.call_count == 0
+
+        # The explicit `hermes honcho migrate` upload is the operator's choice, never gated.
+        assert mgr.migrate_memory_files(second.key, str(tmp_path), force=True) is True
+        assert second_hs.upload_file.call_count == 2
+
+    def test_another_workspace_still_gets_the_files(self, tmp_path, make_manager):
+        (tmp_path / "USER.md").write_text("user profile", encoding="utf-8")
+        for workspace in ("hermes", "fresh-workspace"):
+            mgr = make_manager(write_frequency="turn", peer_name="owner-user", workspace_id=workspace)
+            session, honcho_session = _prime_migration_session(mgr, "cli:test", f"cli-{workspace}")
+            assert mgr.migrate_memory_files(session.key, str(tmp_path)) is True
+            assert honcho_session.upload_file.call_count == 1
+
+
 class TestPrefetchCacheAccessors:
     def test_set_and_pop_context_result(self, make_manager):
         mgr = make_manager(write_frequency="turn")

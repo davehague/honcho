@@ -1680,7 +1680,7 @@ def _find_memory_files(names: list[str]) -> list[Path]:
 def _migrate_upload(mgr, session_key: str, user_files: list[Path]) -> None:
     dirs_with_files = set(str(f.parent) for f in user_files)
     # List (not generator) so every directory is attempted even after one succeeds.
-    if any([mgr.migrate_memory_files(session_key, d) for d in dirs_with_files]):
+    if any([mgr.migrate_memory_files(session_key, d, force=True) for d in dirs_with_files]):
         print(f"  Uploaded user memory files from: {', '.join(dirs_with_files)}")
     else:
         print("  Nothing uploaded (files may already be migrated or empty).")
